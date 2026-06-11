@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GitHub Contribution Snake — ebastari</title>
+<style>
+  body { margin: 0; padding: 2rem 1rem; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; background: #0d1117; color: #e6edf3; display: flex; flex-direction: column; align-items: center; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  p.sub { font-size: 14px; color: #8b949e; margin: 0 0 20px; }
+  .controls { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; justify-content: center; }
+  button { padding: 8px 18px; font-size: 14px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; cursor: pointer; border-radius: 6px; }
+  button:hover { background: #30363d; }
+  .stats { font-size: 14px; color: #8b949e; }
+  .stats b { color: #3fb950; }
+  canvas { border: 1px solid #30363d; border-radius: 6px; background: #0d1117; max-width: 100%; }
+  .note { font-size: 12px; color: #8b949e; margin-top: 14px; text-align: center; max-width: 640px; line-height: 1.6; }
+  a { color: #58a6ff; }
+</style>
+</head>
+<body>
+<h1>Contribution Snake — ebastari</h1>
+<p class="sub">Ular memakan kotak hijau dari riwayat kontribusi GitHub</p>
+
+<div class="controls">
+  <button id="startBtn">&#8634; Mulai ulang</button>
+  <button id="pauseBtn">&#10074;&#10074; Pause</button>
+  <span class="stats">Dimakan: <b id="score">0</b> kotak hijau</span>
+</div>
+
+<canvas id="gameCanvas" width="884" height="119"></canvas>
+
+<p class="note">
+  Grid dimuat dari data kontribusi nyata akun
+  <a href="https://github.com/ebastari" target="_blank">github.com/ebastari</a>.
+  Jika API tidak terjangkau, grid acak digunakan sebagai cadangan.
+</p>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const startBtn = document.getElementById('startBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const scoreEl = document.getElementById('score');
+
+const COLS = 52, ROWS = 7, CELL = 17;
+canvas.width = COLS * CELL;
+canvas.height = ROWS * CELL;
+
+const palette = ['#161b22', '#0e4429', '#006d32', '#26a641', '#39d353'];
+const eatenColor = '#21262d';
+const snakeColor = '#a371f7';
+
+let grid = [], snake = [], score = 0, paused = false, loop = null;
+
+async function loadContributions() {
+  try {
+    const res = await fetch('https://github-contributions-api.jogruber.de/v4/ebastari?y=last');
+    const data = await res.json();
+    const days = data.contributions.slice(-COLS * ROWS);
+    const g = [];
+    for (let y = 0; y < ROWS; y++) g.push([]);
+    days.forEach((d, i) => {
+      const col = Math.floor(i / ROWS), row = i % ROWS;
+      if (col < COLS) g[row][col] = { level: d.level, eaten: false };
+    });
+    for (let y = 0; y < ROWS; y++)
+      for (let x = 0; x < COLS; x++)
+        if (!g[y][x]) g[y][x] = { level: 0, eaten: false };
+    return g;
+  } catch (e) {
+    return randomGrid();
+  }
+}
+
+function randomGrid() {
+  const g = [];
+  for (let y = 0; y < ROWS; y++) {
+    const row = [];
+    for (let x = 0; x < COLS; x++) {
+      const r = Math.random();
+      row.push({ level: r > 0.6 ? Math.ceil(Math.random() * 4) : 0, eaten: false });
+    }
+    g.push(row);
+  }
+  return g;
+}
+
+function nearestFood(head) {
+  let best = null, min = Infinity;
+  for (let y = 0; y < ROWS; y++)
+    for (let x = 0; x < COLS; x++)
+      if (grid[y][x].level > 0 && !grid[y][x].eaten) {
+        const d = Math.abs(x - head.x) + Math.abs(y - head.y);
+        if (d < min) { min = d; best = { x, y }; }
+      }
+  return best;
+}
+
+function nextStep(head, target) {
+  const queue = [head];
+  const seen = new Set([head.x + ',' + head.y]);
+  const parent = {};
+  while (queue.length) {
+    const c = queue.shift();
+    if (c.x === target.x && c.y === target.y) {
+      let node = c, path = [];
+      while (node) { path.unshift(node); node = parent[node.x + ',' + node.y]; }
+      return path[1] || head;
+    }
+    for (const n of [{x:c.x+1,y:c.y},{x:c.x-1,y:c.y},{x:c.x,y:c.y+1},{x:c.x,y:c.y-1}]) {
+      const k = n.x + ',' + n.y;
+      if (n.x >= 0 && n.x < COLS && n.y >= 0 && n.y < ROWS && !seen.has(k)) {
+        seen.add(k); parent[k] = c; queue.push(n);
+      }
+    }
+  }
+  return head;
+}
+
+function tick() {
+  if (paused) return;
+  const head = snake[0];
+  const target = nearestFood(head);
+  if (!target) { clearInterval(loop); return; }
+  const step = nextStep(head, target);
+  snake.unshift({ x: step.x, y: step.y });
+  const cell = grid[step.y][step.x];
+  if (cell.level > 0 && !cell.eaten) {
+    cell.eaten = true;
+    score++;
+    scoreEl.textContent = score;
+  }
+  if (snake.length > 5) snake.pop();
+  draw();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let y = 0; y < ROWS; y++)
+    for (let x = 0; x < COLS; x++) {
+      const c = grid[y][x];
+      ctx.fillStyle = c.eaten ? eatenColor : palette[c.level];
+      roundRect(x * CELL + 1, y * CELL + 1, CELL - 3, CELL - 3, 3);
+    }
+  snake.forEach((s, i) => {
+    ctx.fillStyle = i === 0 ? '#d2a8ff' : snakeColor;
+    roundRect(s.x * CELL + 2, s.y * CELL + 2, CELL - 5, CELL - 5, 3);
+  });
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.fill();
+}
+
+async function start() {
+  if (loop) clearInterval(loop);
+  grid = await loadContributions();
+  snake = [{ x: 0, y: 3 }];
+  score = 0;
+  scoreEl.textContent = '0';
+  paused = false;
+  pauseBtn.innerHTML = '&#10074;&#10074; Pause';
+  draw();
+  loop = setInterval(tick, 130);
+}
+
+startBtn.onclick = start;
+pauseBtn.onclick = () => {
+  paused = !paused;
+  pauseBtn.innerHTML = paused ? '&#9654; Lanjut' : '&#10074;&#10074; Pause';
+};
+
+start();
+</script>
+</body>
+</html>
